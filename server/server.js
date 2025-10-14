@@ -5,7 +5,7 @@ import dotenv from "dotenv";
 import { Server } from "socket.io";
 import { connectDB } from "./lib/db.js";
 import userRouter from "./routes/userRoutes.js";
-import messageRouter from "./routes/messageRoutes.js";
+import messageRouter from "./routes/messageRoutescopy.js";
 
 // Load environment variables
 dotenv.config();

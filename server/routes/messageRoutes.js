@@ -1,12 +1,25 @@
-import express from "express";
-import { protectRoute } from "../middleware/auth.js";
-import { getMessages, getUserForSidebar, markMessageAsSeen, sendMessage } from "../controllers/messageController.js";
+import Message from "../models/Message.js";
+import { io, userSocketMap } from "../server.js";
 
-const messageRouter = express.Router();
+export const sendMessage = async (req, res) => {
+  try {
+    const receiverId = req.params.id;
+    const { text } = req.body;
 
-messageRouter.get("/users", protectRoute, getUserForSidebar);
-messageRouter.get("/:id", protectRoute, getMessages);
-messageRouter.put("/mark/:id", protectRoute, markMessageAsSeen);
-messageRouter.post("/send/:id", protectRoute, sendMessage);
+    const newMessage = await Message.create({
+      senderId: req.user.id, // from protectRoute
+      receiverId,
+      text,
+    });
 
-export default messageRouter
+    // Emit to receiver in real-time if they are online
+    const receiverSocketId = userSocketMap[receiverId];
+    if (receiverSocketId) {
+      io.to(receiverSocketId).emit("newMessage", newMessage);
+    }
+
+    res.status(201).json(newMessage);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
