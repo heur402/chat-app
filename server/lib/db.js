@@ -1,11 +1,21 @@
 import mongoose from "mongoose";
 
-//function to connect to the mongodb database   
 export const connectDB = async () => {
-    try {
-        mongoose.connection.on('connected', ()=> console.log('Database connected'));
-        await mongoose.connect(`${process.env.MONGODB_URI}/SOD-CHAT`)
-    } catch (error) {
-        console.log(error);   
-    }
-}
+  try {
+    // connect directly — don't append the DB name with a slash
+    await mongoose.connect(process.env.MONGODB_URI, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+    });
+
+    console.log("✅ MongoDB connected successfully");
+  } catch (error) {
+    console.error("❌ MongoDB connection error:", error.message);
+    process.exit(1); // stop the app if DB connection fails
+  }
+
+  // Optional: handle disconnection events
+  mongoose.connection.on("disconnected", () => {
+    console.log("⚠️ MongoDB disconnected");
+  });
+};

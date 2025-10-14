@@ -1,61 +1,54 @@
 import express from "express";
-import http from "http";
+import "dotenv/config";
 import cors from "cors";
-import dotenv from "dotenv";
-import { Server } from "socket.io";
+import http from "http";
 import { connectDB } from "./lib/db.js";
 import userRouter from "./routes/userRoutes.js";
 import messageRouter from "./routes/messageRoutes.js";
-
-// Load environment variables
-dotenv.config();
+import { Server } from "socket.io";
 
 // Create Express app and HTTP server
 const app = express();
 const server = http.createServer(app);
 
-// Initialize Socket.io
+// Initialize socket.io server
 export const io = new Server(server, {
-  cors: {
-    origin: "*", // You can replace '*' with your frontend URL if needed
-  },
+  cors: { origin: "*" }
 });
 
-// Store connected users
+// Store online users
 export const userSocketMap = {}; // { userId: socketId }
 
-// Handle Socket.io connections
+// socket.io connection handler
 io.on("connection", (socket) => {
   const userId = socket.handshake.query.userId;
-  console.log("✅ User connected:", userId);
+  console.log("user connected", userId);
 
   if (userId) userSocketMap[userId] = socket.id;
 
-  // Emit updated online users list
+  // emit online users to all connected clients
   io.emit("getOnlineUsers", Object.keys(userSocketMap));
 
-  // Handle disconnection
   socket.on("disconnect", () => {
-    console.log("❌ User disconnected:", userId);
+    console.log("user disconnected", userId);
     delete userSocketMap[userId];
     io.emit("getOnlineUsers", Object.keys(userSocketMap));
   });
 });
 
 // Middleware setup
-app.use(express.json({ limit: "4mb" }));
+app.use(express.json({ limit: "4mb" })); // ✅ fixed
 app.use(cors());
 
-// Test route
-app.get("/api/status", (req, res) => res.send("✅ Server is live"));
-
-// Main routes
+// Routes setup
+app.use("/api/status", (req, res) => res.send("server is live"));
 app.use("/api/auth", userRouter);
 app.use("/api/messages", messageRouter);
 
 // Connect to MongoDB
 await connectDB();
 
-// Start server
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+server.listen(PORT, () =>
+  console.log("server is running on PORT: " + PORT)
+);
