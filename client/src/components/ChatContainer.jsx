@@ -1,6 +1,7 @@
 import React, { useContext, useEffect, useRef, useState } from 'react'
 import assets from '../assets/assets'
 import { formatMessageTime } from '../lib/utils'
+import { useNavigate } from 'react-router-dom';
 import { ChatContext } from '../../context/ChatContext'
 import { AuthContext } from '../../context/AuthContext'
 import { toast } from 'react-hot-toast'
@@ -22,8 +23,8 @@ const ChatContainer = () => {
 
   // handle sending an image
   const handleSendImage = async (e) => {
-    const file = e.target.files[0]   // ✅ fixed
-    if (!file || !file.type.startsWith("image/")) { // ✅ fixed
+    const file = e.target.files[0]
+    if (!file || !file.type.startsWith("image/")) {
       toast.error("Select an image file")
       return
     }
@@ -43,7 +44,7 @@ const ChatContainer = () => {
 
   useEffect(() => {
     if (scrollEnd.current && messages) {
-      scrollEnd.current.scrollIntoView({ behavior: "smooth" }) // ✅ fixed
+      scrollEnd.current.scrollIntoView({ behavior: "smooth" })
     }
   }, [messages])
 
@@ -59,7 +60,6 @@ const ChatContainer = () => {
           )}
         </p>
         <img onClick={() => setSelectedUser(null)} src={assets.arrow_icon} alt="" className='md:hidden max-w-7'/>
-        <img src={assets.help_icon} alt="" className='max-md:hidden max-w-5 h-5 m-0'/>
       </div>
 
       {/* CHAT AREA */}
@@ -72,7 +72,7 @@ const ChatContainer = () => {
             {msg.image ? (
               <img src={msg.image} alt="" className='max-w-[230px] border border-gray-500 rounded-lg overflow-hidden mb-8'/>
             ) : (
-              <p className={`p-2 max-w-[200px] md:text-sm font-light rounded-lg mb-8 break-all bg-violet-500/30 text-white 
+              <p className={`p-2 max-w-[200px] md:text-sm font-light rounded-lg mb-8 break-all bg-gradient-to-r from-purple-400 to-violet-600/50 text-white 
                 ${msg.senderId !== authUser?._id ? 'rounded-br-none' : 'rounded-bl-none'}`}>
                 {msg.text}
               </p>
@@ -110,7 +110,12 @@ const ChatContainer = () => {
             <img src={assets.gallery_icon} alt="g-icon" className='w-5 mr-3 mt-3 cursor-pointer'/>
           </label>
         </div>
-        <img onClick={handleSendMessage} src={assets.send_button} alt="s-btn" className='w-7 cursor-pointer'/>
+        <img 
+          onClick={handleSendMessage} 
+          src={assets.send_button} 
+          alt="s-btn" 
+          className='w-7 cursor-pointer bg-gradient-to-r from-purple-400 to-violet-600 rounded-full p-1.5'
+        />
       </div>
     </div>
   ) : (
