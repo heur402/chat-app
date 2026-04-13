@@ -11,6 +11,7 @@ const HomePage = () => {
     <div className='w-full h-screen'>
       <div className={`border-2 border-gray-600 rounded-2xl overflow-hidden h-full grid grid-cols-1 relative 
         ${selectedUser ? 'md:grid-cols-[1fr_1.5fr_1fr] xl:grid-cols-[1fr_2fr_1fr]' : 'md:grid-cols-2'}`}>
+ {/* Sidebar with min-h-0 for proper flex scrolling */}
         <SideBar />
         <ChatContainer />
         <RightSideBar />

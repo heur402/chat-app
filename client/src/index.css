@@ -6,6 +6,31 @@
   font-family: "Outfit", sans-serif;
 }
 
+/* Custom Scrollbar Styles - Matching bg-gradient-to-t from-purple-500 to-pink-500 */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #a855f7 #0f3460;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: #0f3460;
+  border-radius: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: linear-gradient(to top, #a855f7, #ec4899);
+  border-radius: 10px;
+  transition: background 0.3s ease;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(to top, #c084fc, #f472b6);
+}
+
 ::-webkit-scrollbar{
   display: none;
 }

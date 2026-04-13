@@ -10,6 +10,7 @@ const SideBar = () => {
   const [input, setInput] = useState("")
   const [isLoading, setIsLoading] = useState(true)
   const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
 
   const filteredUsers = input 
     ? users.filter(user => user.fullName?.toLowerCase().includes(input.toLowerCase())) 
@@ -25,31 +26,43 @@ const SideBar = () => {
   }, [onlineUsers])
 
   return (
-    <div className={` h-full flex flex-col ${selectedUser ? "max-md:hidden" : ''}`}>
+    <div className={`h-full flex flex-col overflow-hidden ${selectedUser ? "max-md:hidden" : ''}`}>
       
-      {/* Header */}
-      <div className='p-5 border-b border-[#e94560]/20'>
+      {/* Header - Fixed height section */}
+      <div className='flex-shrink-0 p-5 border-b border-purple-400/20'>
         <div className='flex justify-between items-center mb-6'>
           <img src={assets.logo} alt="logo" className='h-8 object-contain' />
-          <div className='relative group'>
-            <button className='p-2 hover:bg-white/10 rounded-full transition-colors'>
+          <div className='relative'>
+            <button
+              onClick={() => setOpen(!open)}
+              className='p-2 hover:bg-white/10 rounded-full transition-colors'
+            >
               <img src={assets.menu_icon} alt="menu" className='w-5 h-5' />
             </button>
-            <div className='absolute top-full right-0 z-20 w-48 mt-2 py-2 rounded-lg bg-[#0f3460] border border-[#e94560]/30 shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200'>
-              <button 
-                onClick={() => navigate('/profile')} 
-                className='w-full px-4 py-2 text-left text-sm hover:bg-white/10 transition-colors'
-              >
-                Edit Profile
-              </button>
-              <hr className='my-1 border-[#e94560]/20'/>
-              <button 
-                onClick={() => logout()} 
-                className='w-full px-4 py-2 text-left text-sm text-red-400 hover:bg-white/10 transition-colors'
-              >
-                Log Out
-              </button>
-            </div>
+            
+            {open && (
+              <div className='absolute top-full right-0 z-20 w-48 mt-2 py-2 rounded-lg bg-[#0f3460] border border-[#e94560]/30 shadow-xl'>
+                <button 
+                  onClick={() => {
+                    navigate('/profile');
+                    setOpen(false);
+                  }} 
+                  className='w-full px-4 py-2 text-left text-sm hover:bg-white/10 transition-colors'
+                >
+                  Edit Profile
+                </button>
+                <hr className='my-1 border-[#e94560]/20'/>
+                <button 
+                  onClick={() => {
+                    logout();
+                    setOpen(false);
+                  }} 
+                  className='w-full px-4 py-2 text-left text-sm text-red-400 hover:bg-white/10 transition-colors'
+                >
+                  Log Out
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
@@ -66,8 +79,8 @@ const SideBar = () => {
         </div>
       </div>
 
-      {/* Users list */}
-      <div className='flex-1 overflow-y-auto custom-scrollbar'>
+      {/* Users list - Scrollable section */}
+      <div className='flex-1 overflow-y-auto custom-scrollbar min-h-0'>
         {isLoading ? (
           <div className='flex justify-center items-center h-32'>
             <div className='animate-spin rounded-full h-8 w-8 border-2 border-purple-200 border-t-transparent'></div>
