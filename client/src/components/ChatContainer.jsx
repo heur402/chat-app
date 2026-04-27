@@ -756,8 +756,8 @@ const ChatContainer = () => {
           )}
         </p>
         
-        {/* CALL BUTTONS */}
-        <div className='flex gap-1 sm:gap-2'>
+        {/* CALL BUTTONS - HIDDEN */}
+        {/* <div className='flex gap-1 sm:gap-2'>
           <button 
             onClick={() => startCall('audio')}
             className='bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white px-2 sm:px-3 py-1.5 rounded-full text-xs sm:text-sm font-semibold transition-all flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed'
@@ -779,7 +779,7 @@ const ChatContainer = () => {
             </svg>
             <span className="hidden xs:inline">Video</span>
           </button>
-        </div>
+        </div> */}
         
         <img 
           onClick={() => setSelectedUser(null)} 
