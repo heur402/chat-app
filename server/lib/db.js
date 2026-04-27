@@ -3,10 +3,7 @@ import mongoose from "mongoose";
 export const connectDB = async () => {
   try {
     // connect directly — don't append the DB name with a slash
-    await mongoose.connect(process.env.MONGODB_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    });
+    await mongoose.connect(process.env.MONGODB_URI);
 
     console.log("✅ MongoDB connected successfully");
   } catch (error) {

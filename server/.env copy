@@ -1,4 +1,4 @@
-MONGODB_URIc='mongodb+srv://byiringirobonheur:bon01fra@cluster0.njdvled.mongodb.net/?appName=Cluster0'
+MONGODB_URI = "mongodb+srv://byiringirobonheur:bon01fra@cluster0.njdvled.mongodb.net"
 PORT = 5000
 JWT_SECRET="gs#secret" 
 
