@@ -13,7 +13,7 @@ const App = () => {
   return (
     <div
       style={{ backgroundImage: `url(${bg})` }}
-      className="bg-cover bg-contain"
+      className="md:bg-cover bg-contain"
     >
       <Toaster/>
       <Routes>
