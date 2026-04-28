@@ -16,18 +16,70 @@ dotenv.config();
 const app = express();
 const server = http.createServer(app);
 
-// Initialize Socket.io
+// ========== FIXED CORS CONFIGURATION ==========
+// Allow multiple origins (localhost for dev, Vercel for production)
+const allowedOrigins = [
+  'https://chat-app-lime-chi-87.vercel.app',
+  'http://localhost:5173',
+  'http://localhost:3000',
+  process.env.FRONTEND_URL
+].filter(Boolean); // Remove undefined values
+
+// Dynamic CORS options
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps, curl, postman)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      console.log('Blocked origin:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: [
+    'Content-Type', 
+    'Authorization', 
+    'X-Requested-With', 
+    'Accept', 
+    'Origin',
+    'token' // ✅ ADDED 'token' header here
+  ],
+  exposedHeaders: ['Content-Length', 'X-Requested-With'],
+  maxAge: 86400, // 24 hours cache for preflight requests
+  optionsSuccessStatus: 204
+};
+
+// Apply CORS middleware FIRST
+app.use(cors(corsOptions));
+
+// Socket.io with CORS
 export const io = new Server(server, {
   cors: {
-    origin: process.env.FRONTEND_URL || "*",
+    origin: function (origin, callback) {
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.indexOf(origin) !== -1) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
     credentials: true,
+    methods: ["GET", "POST"],
+    allowedHeaders: ["Content-Type", "Authorization", "token"], // ✅ Added 'token' here too
+    transports: ["websocket", "polling"],
   },
-  transports: ["websocket", "polling"],
+  allowEIO3: true,
+  pingTimeout: 60000,
+  pingInterval: 25000,
 });
 
 // Store connected users and their call status
-export const userSocketMap = {}; // { userId: socketId }
-export const userCallStatus = {}; // { userId: { inCall: boolean, withUserId: string } }
+export const userSocketMap = {};
+export const userCallStatus = {};
 
 // Handle Socket.io connections
 io.on("connection", (socket) => {
@@ -41,37 +93,30 @@ io.on("connection", (socket) => {
     }
   }
 
-  // Emit updated online users list
   io.emit("getOnlineUsers", Object.keys(userSocketMap));
 
-  // Handle call initiation
   socket.on("callUser", ({ fromUserId, toUserId, signalData, callType }) => {
     const receiverSocketId = userSocketMap[toUserId];
     const callerSocketId = userSocketMap[fromUserId];
     
-    // Check if receiver is online
     if (!receiverSocketId) {
       socket.emit("callError", { message: "User is offline" });
       return;
     }
     
-    // Check if receiver is already in a call
     if (userCallStatus[toUserId]?.inCall) {
       socket.emit("callError", { message: "User is already in a call" });
       return;
     }
     
-    // Check if caller is already in a call
     if (userCallStatus[fromUserId]?.inCall) {
       socket.emit("callError", { message: "You are already in a call" });
       return;
     }
     
-    // Mark both users as in call
     userCallStatus[fromUserId] = { inCall: true, withUserId: toUserId };
     userCallStatus[toUserId] = { inCall: true, withUserId: fromUserId };
     
-    // Send incoming call to receiver
     io.to(receiverSocketId).emit("incomingCall", {
       fromUserId,
       fromUserInfo: socket.handshake.query.userInfo ? JSON.parse(socket.handshake.query.userInfo) : null,
@@ -83,7 +128,6 @@ io.on("connection", (socket) => {
     console.log(`📞 Call initiated from ${fromUserId} to ${toUserId} (${callType})`);
   });
 
-  // Handle call acceptance
   socket.on("acceptCall", ({ fromUserId, toUserId, signalData }) => {
     const callerSocketId = userSocketMap[fromUserId];
     if (callerSocketId) {
@@ -95,7 +139,6 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Handle call rejection
   socket.on("rejectCall", ({ fromUserId, toUserId }) => {
     const callerSocketId = userSocketMap[fromUserId];
     if (callerSocketId) {
@@ -104,7 +147,6 @@ io.on("connection", (socket) => {
         message: "User rejected the call",
       });
       
-      // Reset call status
       if (userCallStatus[fromUserId]) {
         userCallStatus[fromUserId] = { inCall: false, withUserId: null };
       }
@@ -116,7 +158,6 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Handle ICE candidates for WebRTC
   socket.on("iceCandidate", ({ toUserId, candidate }) => {
     const receiverSocketId = userSocketMap[toUserId];
     if (receiverSocketId) {
@@ -124,7 +165,6 @@ io.on("connection", (socket) => {
     }
   });
 
-  // End call
   socket.on("endCall", ({ toUserId, callDuration }) => {
     const fromUserId = Object.keys(userSocketMap).find(
       (key) => userSocketMap[key] === socket.id
@@ -135,7 +175,6 @@ io.on("connection", (socket) => {
       io.to(receiverSocketId).emit("callEnded", { callDuration });
     }
     
-    // Reset call status for both users
     if (fromUserId && userCallStatus[fromUserId]) {
       userCallStatus[fromUserId] = { inCall: false, withUserId: null };
     }
@@ -146,11 +185,9 @@ io.on("connection", (socket) => {
     console.log(`📞 Call ended between ${fromUserId} and ${toUserId}`);
   });
 
-  // Handle disconnection
   socket.on("disconnect", () => {
     console.log("❌ User disconnected:", userId);
     
-    // If user was in a call, notify the other party
     if (userId && userCallStatus[userId]?.inCall) {
       const otherUserId = userCallStatus[userId].withUserId;
       if (otherUserId && userSocketMap[otherUserId]) {
@@ -158,7 +195,6 @@ io.on("connection", (socket) => {
           message: "User disconnected unexpectedly" 
         });
         
-        // Reset other user's call status
         if (userCallStatus[otherUserId]) {
           userCallStatus[otherUserId] = { inCall: false, withUserId: null };
         }
@@ -171,16 +207,16 @@ io.on("connection", (socket) => {
   });
 });
 
-// Middleware setup
-app.use(cors({
-  origin: process.env.FRONTEND_URL || "http://localhost:5173",
-  credentials: true,
-}));
+// Body parsers (after CORS)
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 // Test route
-app.get("/api/status", (req, res) => res.send("✅ Server is live"));
+app.get("/api/status", (req, res) => res.json({ 
+  status: "✅ Server is live",
+  cors: "enabled",
+  allowedOrigins: allowedOrigins
+}));
 
 // Main routes
 app.use("/api/auth", userRouter);
@@ -206,6 +242,7 @@ const startServer = async () => {
     server.listen(PORT, () => {
       console.log(`🚀 Server running on port ${PORT}`);
       console.log(`📡 WebSocket server ready for calls`);
+      console.log(`🔗 CORS enabled for origins:`, allowedOrigins);
     });
   } catch (error) {
     console.error("Failed to start server:", error);
