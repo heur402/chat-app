@@ -14,32 +14,66 @@ const app = express();
 const server = http.createServer(app);
 
 // ========== CORS CONFIGURATION ==========
-const FRONTEND_URL = process.env.FRONTEND_URL || "https://chat-app-lime-chi-87.vercel.app";
+// Remove trailing slashes from URLs
+const normalizeUrl = (url) => {
+  if (!url) return null;
+  return url.replace(/\/$/, ''); // Remove trailing slash
+};
 
-// Manual CORS middleware (most reliable for Vercel)
-app.use((req, res, next) => {
-  // Allow specific origin
-  res.header('Access-Control-Allow-Origin', FRONTEND_URL);
+const PRODUCTION_URL = normalizeUrl(process.env.FRONTEND_URL) || "https://chat-app-lime-chi-87.vercel.app";
+const LOCAL_URLS = [
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://localhost:5000'
+];
+
+// Dynamic CORS - allows both localhost AND production
+const corsMiddleware = (req, res, next) => {
+  const origin = req.headers.origin;
+  
+  // Check if origin is allowed
+  const isAllowed = origin && (
+    origin === PRODUCTION_URL ||
+    LOCAL_URLS.includes(origin)
+  );
+  
+  if (isAllowed) {
+    res.header('Access-Control-Allow-Origin', origin); // Use the actual origin, not hardcoded
+  } else if (!origin) {
+    // Allow requests with no origin (like mobile apps)
+    res.header('Access-Control-Allow-Origin', '*');
+  }
+  
   res.header('Access-Control-Allow-Credentials', 'true');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, token, X-Requested-With, Accept, Origin');
   res.header('Access-Control-Expose-Headers', 'Content-Length, X-Requested-With');
   
-  // Handle preflight immediately
+  // Handle preflight
   if (req.method === 'OPTIONS') {
     return res.sendStatus(204);
   }
   next();
-});
+};
+
+// Apply CORS middleware
+app.use(corsMiddleware);
 
 // Body parsers
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
-// Socket.io
+// Socket.io with dynamic CORS
 export const io = new Server(server, {
   cors: {
-    origin: FRONTEND_URL,
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      if (origin === PRODUCTION_URL || LOCAL_URLS.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
     credentials: true,
     methods: ["GET", "POST"],
     allowedHeaders: ["Content-Type", "Authorization", "token"],
@@ -47,7 +81,7 @@ export const io = new Server(server, {
   transports: ["websocket", "polling"],
 });
 
-// Your existing socket.io logic here...
+// Your existing socket.io logic
 export const userSocketMap = {};
 export const userCallStatus = {};
 
@@ -180,7 +214,7 @@ app.get("/api/status", (req, res) => {
   res.json({ 
     status: "✅ Server live",
     cors: "enabled",
-    frontend: FRONTEND_URL
+    allowedOrigins: [PRODUCTION_URL, ...LOCAL_URLS]
   });
 });
 
@@ -209,7 +243,8 @@ if (process.env.NODE_ENV !== 'production') {
       const PORT = process.env.PORT || 5000;
       server.listen(PORT, () => {
         console.log(`🚀 Server running on port ${PORT}`);
-        console.log(`🔗 CORS enabled for: ${FRONTEND_URL}`);
+        console.log(`🔗 CORS enabled for production: ${PRODUCTION_URL}`);
+        console.log(`🔗 CORS enabled for local: ${LOCAL_URLS.join(', ')}`);
       });
     } catch (error) {
       console.error("Failed to start server:", error);
@@ -218,6 +253,5 @@ if (process.env.NODE_ENV !== 'production') {
   };
   startServer();
 } else {
-  // Production: Just connect to DB
   connectDB().catch(console.error);
 }
