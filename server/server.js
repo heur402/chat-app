@@ -1,34 +1,31 @@
 import express from "express";
 import http from "http";
-import cors from "cors";
 import dotenv from "dotenv";
 import { Server } from "socket.io";
 import { connectDB } from "./lib/db.js";
 import userRouter from "./routes/userRoutes.js";
 import messageRouter from "./routes/messageRoutescopy.js";
 import callRouter from "./routes/callRoutes.js";
-import { authMiddleware } from "./middleware/authMiddleware.js";
 
 // Load environment variables
 dotenv.config();
 
-// Create Express app and HTTP server
 const app = express();
 const server = http.createServer(app);
 
-// ========== VERCEL-SPECIFIC CORS CONFIGURATION ==========
+// ========== CORS CONFIGURATION ==========
 const FRONTEND_URL = process.env.FRONTEND_URL || "https://chat-app-lime-chi-87.vercel.app";
 
-// Critical: Handle preflight requests BEFORE any other middleware
+// Manual CORS middleware (most reliable for Vercel)
 app.use((req, res, next) => {
-  // Set CORS headers for ALL responses
+  // Allow specific origin
   res.header('Access-Control-Allow-Origin', FRONTEND_URL);
   res.header('Access-Control-Allow-Credentials', 'true');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, token, X-Requested-With, Accept, Origin');
   res.header('Access-Control-Expose-Headers', 'Content-Length, X-Requested-With');
   
-  // Handle preflight OPTIONS request immediately
+  // Handle preflight immediately
   if (req.method === 'OPTIONS') {
     return res.sendStatus(204);
   }
@@ -39,25 +36,21 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
-// Socket.io with CORS
+// Socket.io
 export const io = new Server(server, {
   cors: {
     origin: FRONTEND_URL,
     credentials: true,
     methods: ["GET", "POST"],
     allowedHeaders: ["Content-Type", "Authorization", "token"],
-    transports: ["websocket", "polling"],
   },
-  allowEIO3: true,
-  pingTimeout: 60000,
-  pingInterval: 25000,
+  transports: ["websocket", "polling"],
 });
 
-// Store connected users and their call status
+// Your existing socket.io logic here...
 export const userSocketMap = {};
 export const userCallStatus = {};
 
-// Handle Socket.io connections
 io.on("connection", (socket) => {
   const userId = socket.handshake.query.userId;
   console.log("✅ User connected:", userId);
@@ -73,7 +66,6 @@ io.on("connection", (socket) => {
 
   socket.on("callUser", ({ fromUserId, toUserId, signalData, callType }) => {
     const receiverSocketId = userSocketMap[toUserId];
-    const callerSocketId = userSocketMap[fromUserId];
     
     if (!receiverSocketId) {
       socket.emit("callError", { message: "User is offline" });
@@ -183,36 +175,33 @@ io.on("connection", (socket) => {
   });
 });
 
-// Test route
+// Routes
 app.get("/api/status", (req, res) => {
   res.json({ 
-    status: "✅ Server is live on Vercel",
+    status: "✅ Server live",
     cors: "enabled",
-    frontend: FRONTEND_URL,
-    timestamp: new Date().toISOString()
+    frontend: FRONTEND_URL
   });
 });
 
-// Main routes
 app.use("/api/auth", userRouter);
 app.use("/api/messages", messageRouter);
 app.use("/api/calls", callRouter);
 
-// Error handling middleware
+// Error handling
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).json({ message: "Something went wrong!", error: err.message });
 });
 
-// 404 handler
 app.use((req, res) => {
   res.status(404).json({ message: "Route not found" });
 });
 
-// Export for Vercel serverless
+// Export for Vercel
 export default app;
 
-// Only listen when not on Vercel (local development)
+// Local development only
 if (process.env.NODE_ENV !== 'production') {
   const startServer = async () => {
     try {
@@ -220,7 +209,6 @@ if (process.env.NODE_ENV !== 'production') {
       const PORT = process.env.PORT || 5000;
       server.listen(PORT, () => {
         console.log(`🚀 Server running on port ${PORT}`);
-        console.log(`📡 WebSocket server ready for calls`);
         console.log(`🔗 CORS enabled for: ${FRONTEND_URL}`);
       });
     } catch (error) {
@@ -228,9 +216,8 @@ if (process.env.NODE_ENV !== 'production') {
       process.exit(1);
     }
   };
-  
   startServer();
 } else {
-  // For Vercel, just connect to DB but don't listen on a port
+  // Production: Just connect to DB
   connectDB().catch(console.error);
 }
