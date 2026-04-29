@@ -3,6 +3,31 @@ import User from "../models/User.js";
 import cloudinary from "../lib/cloudinary.js";
 import { io, userSocketMap } from "../server.js";
 
+// Helper function to emit to all user sockets
+const emitToUser = (userId, event, data) => {
+  const userSockets = userSocketMap.get(userId);
+  if (userSockets && userSockets.size > 0) {
+    userSockets.forEach(socketId => {
+      io.to(socketId).emit(event, data);
+    });
+  }
+};
+
+// Helper function to get unread count for a user
+const getUnreadCount = async (userId) => {
+  const users = await User.find({ _id: { $ne: userId } }).select("_id");
+  const unseenMessages = {};
+  await Promise.all(users.map(async (user) => {
+    const count = await Message.countDocuments({
+      senderId: user._id,
+      receiverId: userId,
+      seen: false
+    });
+    if (count > 0) unseenMessages[user._id.toString()] = count;
+  }));
+  return unseenMessages;
+};
+
 // ---------------- GET USERS FOR SIDEBAR ----------------
 export const getUserForSidebar = async (req, res) => {
   try {
@@ -12,15 +37,7 @@ export const getUserForSidebar = async (req, res) => {
     const users = await User.find({ _id: { $ne: userId } }).select("-password");
 
     // Collect unseen messages count per user
-    const unseenMessages = {};
-    await Promise.all(users.map(async (user) => {
-      const messages = await Message.find({
-        senderId: user._id,
-        receiverId: userId,
-        seen: false
-      });
-      if (messages.length > 0) unseenMessages[user._id] = messages.length;
-    }));
+    const unseenMessages = await getUnreadCount(userId);
 
     res.json({ success: true, users, unseenMessages });
   } catch (err) {
@@ -45,8 +62,12 @@ export const getMessages = async (req, res) => {
     // Mark messages from selectedUser as seen
     await Message.updateMany(
       { senderId: selectedUserId, receiverId: myId, seen: false },
-      { seen: true }
+      { seen: true, status: "read", readAt: new Date() }
     );
+
+    // Emit unread update to current user
+    const updatedUnread = await getUnreadCount(myId);
+    emitToUser(myId.toString(), "unreadUpdate", { unseenMessages: updatedUnread });
 
     res.json({ success: true, messages });
   } catch (err) {
@@ -76,14 +97,16 @@ export const markMessageAsSeen = async (req, res) => {
     message.readAt = new Date();
     await message.save();
 
-    const senderSocketId = userSocketMap[message.senderId.toString()];
-    if (senderSocketId) {
-      io.to(senderSocketId).emit("messageStatusUpdate", {
-        messageId,
-        status: "read",
-        timestamp: message.readAt,
-      });
-    }
+    // Emit status update to sender
+    emitToUser(message.senderId.toString(), "messageStatusUpdate", {
+      messageId,
+      status: "read",
+      timestamp: message.readAt,
+    });
+
+    // Emit unread update to receiver
+    const updatedUnread = await getUnreadCount(req.user._id);
+    emitToUser(req.user._id.toString(), "unreadUpdate", { unseenMessages: updatedUnread });
 
     res.json({ success: true, message });
   } catch (err) {
@@ -125,13 +148,16 @@ export const updateMessageStatus = async (req, res) => {
     );
 
     // Emit status update to sender
-    const senderSocketId = userSocketMap[message.senderId.toString()];
-    if (senderSocketId) {
-      io.to(senderSocketId).emit("messageStatusUpdate", {
-        messageId,
-        status,
-        timestamp: updateData.deliveredAt || updateData.readAt,
-      });
+    emitToUser(message.senderId.toString(), "messageStatusUpdate", {
+      messageId,
+      status,
+      timestamp: updateData.deliveredAt || updateData.readAt,
+    });
+
+    // If read, emit unread update
+    if (status === "read") {
+      const updatedUnread = await getUnreadCount(userId);
+      emitToUser(userId.toString(), "unreadUpdate", { unseenMessages: updatedUnread });
     }
 
     res.json({ success: true, message: updatedMessage });
@@ -146,13 +172,12 @@ export const sendMessage = async (req, res) => {
   try {
     const { text, image, fileUrl, fileName, fileSize } = req.body;
     const receiverId = req.params.id;
-    const senderId = req.user._id; // ✅ get from authenticated user
+    const senderId = req.user._id;
 
     let imageUrl = "";
     let messageType = "text";
 
     if (image) {
-      // Upload to Cloudinary
       const uploadResponse = await cloudinary.uploader.upload(image);
       imageUrl = uploadResponse.secure_url;
       messageType = "image";
@@ -176,30 +201,31 @@ export const sendMessage = async (req, res) => {
     });
 
     // Emit message to receiver if online
-    const receiverSocketId = userSocketMap[receiverId];
-    if (receiverSocketId) {
-      io.to(receiverSocketId).emit("new message", newMessage);
+    const receiverSockets = userSocketMap.get(receiverId.toString());
+    if (receiverSockets && receiverSockets.size > 0) {
+      emitToUser(receiverId.toString(), "new message", newMessage);
 
-      // Auto-mark as delivered if receiver is online
+      // Auto-mark as delivered
       await Message.findByIdAndUpdate(newMessage._id, {
         status: "delivered",
         deliveredAt: new Date(),
       });
 
       // Emit delivery status to sender
-      const senderSocketId = userSocketMap[senderId.toString()];
-      if (senderSocketId) {
-        io.to(senderSocketId).emit("messageStatusUpdate", {
-          messageId: newMessage._id,
-          status: "delivered",
-          timestamp: new Date(),
-        });
-      }
+      emitToUser(senderId.toString(), "messageStatusUpdate", {
+        messageId: newMessage._id,
+        status: "delivered",
+        timestamp: new Date(),
+      });
     }
+
+    // Emit unread update to receiver
+    const receiverUnread = await getUnreadCount(receiverId);
+    emitToUser(receiverId.toString(), "unreadUpdate", { unseenMessages: receiverUnread });
 
     res.json({ success: true, newMessage });
   } catch (err) {
     console.error(err.message);
-    res.json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
 };

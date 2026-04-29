@@ -44,108 +44,138 @@ if (process.env.REDIS_URL) {
   Promise.all([pubClient.connect(), subClient.connect()]).catch(console.error);
 }
 
+// ========== PRODUCTION CORS SETUP (MUST BE FIRST) ==========
+const PRODUCTION_URL = process.env.FRONTEND_URL?.replace(/\/$/, "") || 
+  "https://chat-app-lime-chi-87.vercel.app";
+
+const allowedOrigins = [
+  PRODUCTION_URL,
+  "http://localhost:5173",
+  "http://localhost:3000",
+  "http://localhost:5000",
+];
+
+// CORS configuration for Express
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests with no origin (mobile apps, curl, Postman)
+    if (!origin) {
+      return callback(null, true);
+    }
+    
+    // Check if origin is allowed
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.warn(`❌ CORS blocked origin: ${origin}`);
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+  allowedHeaders: [
+    "Content-Type", 
+    "Authorization", 
+    "token", 
+    "X-Requested-With", 
+    "Accept", 
+    "Origin"
+  ],
+  exposedHeaders: ["Content-Length", "X-Requested-With"],
+  maxAge: 86400, // Cache preflight for 24 hours
+};
+
+// Apply CORS BEFORE all other middleware
+app.use(cors(corsOptions));
+
+// Handle preflight requests for ALL routes (Vercel-compatible)
+app.use((req, res, next) => {
+  if (req.method === "OPTIONS") {
+    // Explicitly set CORS headers for preflight
+    const origin = req.headers.origin;
+    
+    if (!origin || allowedOrigins.includes(origin)) {
+      res.header("Access-Control-Allow-Origin", origin || "*");
+      res.header("Access-Control-Allow-Credentials", "true");
+      res.header(
+        "Access-Control-Allow-Methods",
+        "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+      );
+      res.header(
+        "Access-Control-Allow-Headers",
+        "Content-Type, Authorization, token, X-Requested-With, Accept, Origin"
+      );
+      res.header("Access-Control-Max-Age", "86400");
+      return res.status(204).send();
+    }
+  }
+  next();
+});
+
 // ========== SECURITY MIDDLEWARE ==========
 app.set(
   "trust proxy",
   process.env.TRUST_PROXY === "true" || process.env.NODE_ENV === "production",
 );
 
+// Configure Helmet without CSP conflicts
 app.use(
   helmet({
-    contentSecurityPolicy: {
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" },
+    contentSecurityPolicy: process.env.NODE_ENV === "production" ? {
       directives: {
         defaultSrc: ["'self'"],
         styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
         fontSrc: ["'self'", "https://fonts.gstatic.com"],
         imgSrc: ["'self'", "data:", "https://res.cloudinary.com"],
+        scriptSrc: ["'self'", "'unsafe-inline'"],
         connectSrc: [
           "'self'",
           "wss:",
           "ws:",
-          process.env.REDIS_URL
-            ? new URL(process.env.REDIS_URL).origin
-            : undefined,
+          PRODUCTION_URL,
+          ...(process.env.REDIS_URL ? [new URL(process.env.REDIS_URL).origin] : []),
         ].filter(Boolean),
       },
-    },
+    } : false, // Disable CSP in development to avoid issues
   }),
 );
 
-// Global rate limiting for all requests
+// Rate limiting - EXCLUDE OPTIONS requests
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
+  max: 100,
   message: "Too many requests from this IP, please try again later.",
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req) => req.method === "OPTIONS", // Skip rate limiting for preflight
 });
+
 app.use(limiter);
-
-// ========== CORS CONFIGURATION ==========
-// Remove trailing slashes from URLs
-const normalizeUrl = (url) => {
-  if (!url) return null;
-  return url.replace(/\/$/, ""); // Remove trailing slash
-};
-
-const PRODUCTION_URL =
-  normalizeUrl(process.env.FRONTEND_URL) ||
-  "https://chat-app-lime-chi-87.vercel.app";
-const LOCAL_URLS = [
-  "http://localhost:5173",
-  "http://localhost:3000",
-  "http://localhost:5000",
-];
-
-// Dynamic CORS - allows both localhost AND production
-const corsMiddleware = (req, res, next) => {
-  const origin = req.headers.origin;
-
-  // Check if origin is allowed
-  const isAllowed =
-    origin && (origin === PRODUCTION_URL || LOCAL_URLS.includes(origin));
-
-  if (isAllowed) {
-    res.header("Access-Control-Allow-Origin", origin); // Use the actual origin, not hardcoded
-  } else if (!origin) {
-    // Allow requests with no origin (like mobile apps)
-    res.header("Access-Control-Allow-Origin", "*");
-  }
-
-  res.header("Access-Control-Allow-Credentials", "true");
-  res.header(
-    "Access-Control-Allow-Methods",
-    "GET, POST, PUT, DELETE, OPTIONS, PATCH",
-  );
-  res.header(
-    "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, token, X-Requested-With, Accept, Origin",
-  );
-  res.header(
-    "Access-Control-Expose-Headers",
-    "Content-Length, X-Requested-With",
-  );
-
-  // Handle preflight
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(204);
-  }
-  next();
-};
-
-// Apply CORS middleware
-app.use(corsMiddleware);
 
 // Body parsers
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
-// Socket.io with Redis adapter for horizontal scaling
+// Health check endpoint (useful for Vercel)
+app.get("/api/status", (req, res) => {
+  res.json({ 
+    status: "✅ Server live",
+    cors: "enabled",
+    environment: process.env.NODE_ENV || "development",
+    allowedOrigins,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// ========== SOCKET.IO SETUP ==========
 export const io = new Server(server, {
   cors: {
     origin: (origin, callback) => {
+      // Same logic as Express CORS
       if (!origin) return callback(null, true);
-      if (origin === PRODUCTION_URL || LOCAL_URLS.includes(origin)) {
+      if (allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
         callback(new Error("Not allowed by CORS"));
@@ -156,6 +186,9 @@ export const io = new Server(server, {
     allowedHeaders: ["Content-Type", "Authorization", "token"],
   },
   transports: ["websocket", "polling"],
+  allowEIO3: true, // Support older client versions
+  pingTimeout: 60000,
+  pingInterval: 25000,
 });
 
 // Use Redis adapter if available
@@ -164,10 +197,10 @@ if (pubClient && subClient) {
   console.log("🔴 Redis adapter enabled for Socket.io scaling");
 }
 
-// Your existing socket.io logic
-export const userSocketMap = {};
-export const userPresenceMap = {}; // Enhanced presence tracking
-export const userCallStatus = {};
+// ========== SOCKET.IO CONNECTION HANDLING ==========
+export const userSocketMap = new Map(); // userId -> Set of socketIds
+export const userPresenceMap = new Map(); // userId -> presence info
+export const userCallStatus = new Map(); // userId -> call status
 
 io.on("connection", (socket) => {
   const userId = socket.handshake.query.userId;
@@ -175,44 +208,60 @@ io.on("connection", (socket) => {
     ? JSON.parse(socket.handshake.query.userInfo)
     : null;
 
-  console.log("✅ User connected:", userId);
+  console.log("✅ User connected:", userId, "Socket:", socket.id);
 
   if (userId) {
-    userSocketMap[userId] = socket.id;
-    userPresenceMap[userId] = {
+    // Add socket to user's socket set
+    if (!userSocketMap.has(userId)) {
+      userSocketMap.set(userId, new Set());
+    }
+    userSocketMap.get(userId).add(socket.id);
+
+    // Update presence
+    userPresenceMap.set(userId, {
       status: "online",
       lastSeen: new Date(),
-      socketId: socket.id,
+      socketIds: Array.from(userSocketMap.get(userId)),
       userInfo,
-    };
+    });
 
-    if (!userCallStatus[userId]) {
-      userCallStatus[userId] = { inCall: false, withUserId: null };
+    // Initialize call status if not exists
+    if (!userCallStatus.has(userId)) {
+      userCallStatus.set(userId, { inCall: false, withUserId: null });
     }
+
+    // Broadcast presence update
+    io.emit("presenceUpdate", {
+      userId,
+      status: "online",
+      lastSeen: userPresenceMap.get(userId).lastSeen,
+    });
+
+    // Send current online users
+    io.emit("getOnlineUsers", Array.from(userSocketMap.keys()));
   }
 
   // Heartbeat mechanism
   const heartbeat = setInterval(() => {
     socket.emit("ping", { timestamp: Date.now() });
-  }, 30000); // Ping every 30 seconds
+  }, 30000);
 
   socket.on("pong", (data) => {
-    if (userId && userPresenceMap[userId]) {
-      userPresenceMap[userId].lastSeen = new Date();
+    if (userId && userPresenceMap.has(userId)) {
+      userPresenceMap.get(userId).lastSeen = new Date();
     }
   });
 
   // Presence status updates
   socket.on("updatePresence", (status) => {
-    if (userId && userPresenceMap[userId]) {
-      userPresenceMap[userId].status = status;
-      userPresenceMap[userId].lastSeen = new Date();
+    if (userId && userPresenceMap.has(userId)) {
+      userPresenceMap.get(userId).status = status;
+      userPresenceMap.get(userId).lastSeen = new Date();
 
-      // Broadcast presence update to all connected clients
       io.emit("presenceUpdate", {
         userId,
         status,
-        lastSeen: userPresenceMap[userId].lastSeen,
+        lastSeen: userPresenceMap.get(userId).lastSeen,
       });
     }
   });
@@ -220,171 +269,175 @@ io.on("connection", (socket) => {
   // Typing indicators
   socket.on("typing", (data) => {
     const { toUserId, isTyping } = data;
-    const receiverSocketId = userSocketMap[toUserId];
-    if (receiverSocketId) {
-      io.to(receiverSocketId).emit("userTyping", {
-        fromUserId: userId,
-        isTyping,
+    const receiverSockets = userSocketMap.get(toUserId);
+    if (receiverSockets && receiverSockets.size > 0) {
+      receiverSockets.forEach(socketId => {
+        io.to(socketId).emit("userTyping", {
+          fromUserId: userId,
+          isTyping,
+        });
       });
     }
   });
 
-  io.emit("getOnlineUsers", Object.keys(userSocketMap));
-
+  // Call handling
   socket.on("callUser", ({ fromUserId, toUserId, signalData, callType }) => {
-    const receiverSocketId = userSocketMap[toUserId];
+    const receiverSockets = userSocketMap.get(toUserId);
 
-    if (!receiverSocketId) {
+    if (!receiverSockets || receiverSockets.size === 0) {
       socket.emit("callError", { message: "User is offline" });
       return;
     }
 
-    if (userCallStatus[toUserId]?.inCall) {
+    const callStatus = userCallStatus.get(toUserId);
+    if (callStatus?.inCall) {
       socket.emit("callError", { message: "User is already in a call" });
       return;
     }
 
-    if (userCallStatus[fromUserId]?.inCall) {
+    const fromCallStatus = userCallStatus.get(fromUserId);
+    if (fromCallStatus?.inCall) {
       socket.emit("callError", { message: "You are already in a call" });
       return;
     }
 
-    userCallStatus[fromUserId] = { inCall: true, withUserId: toUserId };
-    userCallStatus[toUserId] = { inCall: true, withUserId: fromUserId };
+    userCallStatus.set(fromUserId, { inCall: true, withUserId: toUserId });
+    userCallStatus.set(toUserId, { inCall: true, withUserId: fromUserId });
 
-    io.to(receiverSocketId).emit("incomingCall", {
-      fromUserId,
-      fromUserInfo: socket.handshake.query.userInfo
-        ? JSON.parse(socket.handshake.query.userInfo)
-        : null,
-      signal: signalData,
-      callType,
-      callId: Date.now().toString(),
+    receiverSockets.forEach(socketId => {
+      io.to(socketId).emit("incomingCall", {
+        fromUserId,
+        fromUserInfo: userInfo,
+        signal: signalData,
+        callType,
+        callId: Date.now().toString(),
+      });
     });
 
-    console.log(
-      `📞 Call initiated from ${fromUserId} to ${toUserId} (${callType})`,
-    );
+    console.log(`📞 Call initiated from ${fromUserId} to ${toUserId} (${callType})`);
   });
 
   socket.on("acceptCall", ({ fromUserId, toUserId, signalData }) => {
-    const callerSocketId = userSocketMap[fromUserId];
-    if (callerSocketId) {
-      io.to(callerSocketId).emit("callAccepted", {
-        toUserId,
-        signal: signalData,
+    const callerSockets = userSocketMap.get(fromUserId);
+    if (callerSockets && callerSockets.size > 0) {
+      callerSockets.forEach(socketId => {
+        io.to(socketId).emit("callAccepted", {
+          toUserId,
+          signal: signalData,
+        });
       });
       console.log(`✅ Call accepted from ${toUserId} to ${fromUserId}`);
     }
   });
 
   socket.on("rejectCall", ({ fromUserId, toUserId }) => {
-    const callerSocketId = userSocketMap[fromUserId];
-    if (callerSocketId) {
-      io.to(callerSocketId).emit("callRejected", {
-        toUserId,
-        message: "User rejected the call",
+    const callerSockets = userSocketMap.get(fromUserId);
+    if (callerSockets && callerSockets.size > 0) {
+      callerSockets.forEach(socketId => {
+        io.to(socketId).emit("callRejected", {
+          toUserId,
+          message: "User rejected the call",
+        });
       });
 
-      if (userCallStatus[fromUserId]) {
-        userCallStatus[fromUserId] = { inCall: false, withUserId: null };
-      }
-      if (userCallStatus[toUserId]) {
-        userCallStatus[toUserId] = { inCall: false, withUserId: null };
-      }
+      userCallStatus.set(fromUserId, { inCall: false, withUserId: null });
+      userCallStatus.set(toUserId, { inCall: false, withUserId: null });
 
       console.log(`❌ Call rejected from ${toUserId} to ${fromUserId}`);
     }
   });
 
   socket.on("iceCandidate", ({ toUserId, candidate }) => {
-    const receiverSocketId = userSocketMap[toUserId];
-    if (receiverSocketId) {
-      io.to(receiverSocketId).emit("iceCandidate", { candidate });
+    const receiverSockets = userSocketMap.get(toUserId);
+    if (receiverSockets && receiverSockets.size > 0) {
+      receiverSockets.forEach(socketId => {
+        io.to(socketId).emit("iceCandidate", { candidate });
+      });
     }
   });
 
   socket.on("endCall", ({ toUserId, callDuration }) => {
-    const fromUserId = Object.keys(userSocketMap).find(
-      (key) => userSocketMap[key] === socket.id,
-    );
+    const fromUserId = userId; // Assuming socket belongs to fromUserId
 
-    const receiverSocketId = userSocketMap[toUserId];
-    if (receiverSocketId) {
-      io.to(receiverSocketId).emit("callEnded", { callDuration });
+    const receiverSockets = userSocketMap.get(toUserId);
+    if (receiverSockets && receiverSockets.size > 0) {
+      receiverSockets.forEach(socketId => {
+        io.to(socketId).emit("callEnded", { callDuration });
+      });
     }
 
-    if (fromUserId && userCallStatus[fromUserId]) {
-      userCallStatus[fromUserId] = { inCall: false, withUserId: null };
+    if (fromUserId && userCallStatus.has(fromUserId)) {
+      userCallStatus.set(fromUserId, { inCall: false, withUserId: null });
     }
-    if (toUserId && userCallStatus[toUserId]) {
-      userCallStatus[toUserId] = { inCall: false, withUserId: null };
+    if (toUserId && userCallStatus.has(toUserId)) {
+      userCallStatus.set(toUserId, { inCall: false, withUserId: null });
     }
 
     console.log(`📞 Call ended between ${fromUserId} and ${toUserId}`);
   });
 
+  // Disconnect handling
   socket.on("disconnect", () => {
-    console.log("❌ User disconnected:", userId);
+    console.log("❌ User disconnected:", userId, "Socket:", socket.id);
     clearInterval(heartbeat);
 
     if (userId) {
-      // Set presence to offline but keep lastSeen
-      if (userPresenceMap[userId]) {
-        userPresenceMap[userId].status = "offline";
-        userPresenceMap[userId].lastSeen = new Date();
+      const userSockets = userSocketMap.get(userId);
+      if (userSockets) {
+        userSockets.delete(socket.id);
 
-        // Broadcast offline status
-        io.emit("presenceUpdate", {
-          userId,
-          status: "offline",
-          lastSeen: userPresenceMap[userId].lastSeen,
-        });
+        // If no more sockets, mark as offline
+        if (userSockets.size === 0) {
+          userSocketMap.delete(userId);
 
-        // Remove from presence map after 5 minutes of inactivity
-        setTimeout(
-          () => {
-            if (
-              userPresenceMap[userId] &&
-              userPresenceMap[userId].status === "offline"
-            ) {
-              delete userPresenceMap[userId];
+          if (userPresenceMap.has(userId)) {
+            userPresenceMap.get(userId).status = "offline";
+            userPresenceMap.get(userId).lastSeen = new Date();
+
+            io.emit("presenceUpdate", {
+              userId,
+              status: "offline",
+              lastSeen: userPresenceMap.get(userId).lastSeen,
+            });
+
+            // Clean up presence after 5 minutes
+            setTimeout(() => {
+              if (userPresenceMap.has(userId) && userPresenceMap.get(userId).status === "offline") {
+                userPresenceMap.delete(userId);
+              }
+            }, 5 * 60 * 1000);
+          }
+
+          // Handle ongoing calls
+          const callStatus = userCallStatus.get(userId);
+          if (callStatus?.inCall) {
+            const otherUserId = callStatus.withUserId;
+            if (otherUserId && userSocketMap.has(otherUserId)) {
+              const otherSockets = userSocketMap.get(otherUserId);
+              otherSockets.forEach(socketId => {
+                io.to(socketId).emit("callEnded", {
+                  message: "User disconnected unexpectedly",
+                });
+              });
+              userCallStatus.set(otherUserId, { inCall: false, withUserId: null });
             }
-          },
-          5 * 60 * 1000,
-        ); // 5 minutes
-      }
+          }
 
-      if (userCallStatus[userId]?.inCall) {
-        const otherUserId = userCallStatus[userId].withUserId;
-        if (otherUserId && userSocketMap[otherUserId]) {
-          io.to(userSocketMap[otherUserId]).emit("callEnded", {
-            message: "User disconnected unexpectedly",
-          });
-
-          if (userCallStatus[otherUserId]) {
-            userCallStatus[otherUserId] = { inCall: false, withUserId: null };
+          userCallStatus.delete(userId);
+        } else {
+          // Update presence with remaining sockets
+          if (userPresenceMap.has(userId)) {
+            userPresenceMap.get(userId).socketIds = Array.from(userSockets);
           }
         }
       }
 
-      delete userSocketMap[userId];
-      delete userCallStatus[userId];
+      io.emit("getOnlineUsers", Array.from(userSocketMap.keys()));
     }
-
-    io.emit("getOnlineUsers", Object.keys(userSocketMap));
   });
 });
 
 // Routes
-app.get("/api/status", (req, res) => {
-  res.json({ 
-    status: "✅ Server live",
-    cors: "enabled",
-    allowedOrigins: [PRODUCTION_URL, ...LOCAL_URLS]
-  });
-});
-
 app.use("/api/auth", userRouter);
 app.use("/api/messages", messageRouter);
 app.use("/api/calls", callRouter);
@@ -392,9 +445,22 @@ app.use("/api/calls", callRouter);
 // Error handling
 app.use((err, req, res, next) => {
   console.error(err.stack);
-  res.status(500).json({ message: "Something went wrong!", error: err.message });
+  
+  // Handle CORS errors specifically
+  if (err.message === "Not allowed by CORS") {
+    return res.status(403).json({ 
+      message: "CORS error: Origin not allowed",
+      error: err.message 
+    });
+  }
+  
+  res.status(500).json({ 
+    message: "Something went wrong!", 
+    error: process.env.NODE_ENV === "production" ? "Internal Server Error" : err.message 
+  });
 });
 
+// 404 handler
 app.use((req, res) => {
   res.status(404).json({ message: "Route not found" });
 });
@@ -410,8 +476,7 @@ if (process.env.NODE_ENV !== 'production') {
       const PORT = process.env.PORT || 5000;
       server.listen(PORT, () => {
         console.log(`🚀 Server running on port ${PORT}`);
-        console.log(`🔗 CORS enabled for production: ${PRODUCTION_URL}`);
-        console.log(`🔗 CORS enabled for local: ${LOCAL_URLS.join(', ')}`);
+        console.log(`🔗 CORS enabled for: ${allowedOrigins.join(', ')}`);
       });
     } catch (error) {
       console.error("Failed to start server:", error);
