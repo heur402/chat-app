@@ -76,7 +76,10 @@ export const updateProfile = async (req, res) => {
         res.json({success: false, message: error.message})
     }
 }*/
-import { generateToken } from "../lib/utils.js";
+import {
+  generateAccessToken,
+  generateRefreshToken,
+} from "../middleware/auth.js";
 import User from "../models/User.js";
 import bcrypt from "bcryptjs";
 import cloudinary from "../lib/cloudinary.js";
@@ -105,12 +108,18 @@ export const signup = async (req, res) => {
       bio,
     });
 
-    const token = generateToken(newUser._id);
+    const accessToken = generateAccessToken(newUser._id);
+    const refreshToken = generateRefreshToken(newUser._id);
+
+    // Store refresh token with user (in production, use Redis or secure storage)
+    newUser.refreshToken = refreshToken;
+    await newUser.save();
 
     res.json({
       success: true,
       userData: newUser,
-      token,
+      accessToken,
+      refreshToken,
       message: "Account Created successfully",
     });
   } catch (error) {
@@ -134,17 +143,68 @@ export const login = async (req, res) => {
       return res.json({ success: false, message: "Invalid credentials" });
     }
 
-    const token = generateToken(userData._id);
+    const accessToken = generateAccessToken(userData._id);
+    const refreshToken = generateRefreshToken(userData._id);
+
+    // Store refresh token with user
+    userData.refreshToken = refreshToken;
+    await userData.save();
 
     res.json({
       success: true,
       userData,
-      token,
+      accessToken,
+      refreshToken,
       message: "Login Successful",
     });
   } catch (error) {
     console.log(error);
     res.json({ success: false, message: error.message });
+  }
+};
+
+// Refresh access token
+export const refreshToken = async (req, res) => {
+  try {
+    const user = req.user;
+    const refreshToken = req.refreshToken;
+
+    // Verify refresh token matches stored token
+    if (user.refreshToken !== refreshToken) {
+      return res
+        .status(401)
+        .json({ success: false, message: "Invalid refresh token" });
+    }
+
+    const newAccessToken = generateAccessToken(user._id);
+    const newRefreshToken = generateRefreshToken(user._id);
+
+    // Update stored refresh token
+    user.refreshToken = newRefreshToken;
+    await user.save();
+
+    res.json({
+      success: true,
+      accessToken: newAccessToken,
+      refreshToken: newRefreshToken,
+    });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ success: false, message: "Token refresh failed" });
+  }
+};
+
+// Logout (invalidate refresh token)
+export const logout = async (req, res) => {
+  try {
+    const user = req.user;
+    user.refreshToken = null;
+    await user.save();
+
+    res.json({ success: true, message: "Logged out successfully" });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ success: false, message: "Logout failed" });
   }
 };
 
